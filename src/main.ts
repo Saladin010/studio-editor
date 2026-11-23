@@ -43,6 +43,8 @@ import { EditorUI } from './ui/editor';
 import { i18n } from './ui/localization';
 import { registerSelectCursor } from './ui/select-cursor';
 import { registerWebMCP } from './webmcp';
+import { initStudioBridge } from './bridge';
+import type { StudioBridgeAPI } from './bridge';
 
 declare global {
     interface LaunchParams {
@@ -55,6 +57,7 @@ declare global {
         };
         scene: Scene;
         editor: EditorAPI;
+        studioBridge?: StudioBridgeAPI;
     }
 }
 
@@ -313,6 +316,9 @@ const main = async () => {
 
     // Register after the editor services and preferences are available.
     registerWebMCP(editor);
+
+    // Register studio bridge for postMessage communication
+    initStudioBridge(events, scene);
 
     // load async models
     scene.start();
