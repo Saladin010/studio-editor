@@ -3,6 +3,13 @@ import { ElementType } from '../element';
 import type { Events } from '../events';
 import type { Scene } from '../scene';
 import type { Splat } from '../splat';
+import {
+    extractModelFilename,
+    type GlbModelElement,
+    isGlbUrl,
+    loadGlbModelElement,
+    raycastGlbModels
+} from './glb-model';
 
 export type CropBoxBounds = [number, number, number, number, number, number];
 
@@ -100,13 +107,25 @@ export const initStudioBridge = (events: Events, scene: Scene): StudioBridgeAPI 
         let coords: [number, number, number] | null = null;
 
         try {
-            const hit = await scene.camera.intersect(nx, ny);
-            if (hit && hit.position) {
-                coords = [
-                    Number(hit.position.x.toFixed(3)),
-                    Number(hit.position.y.toFixed(3)),
-                    Number(hit.position.z.toFixed(3))
-                ];
+            const models = scene.getElementsByType(ElementType.model) as GlbModelElement[];
+            if (models.length > 0) {
+                const glbHit = raycastGlbModels(scene, models, event.clientX, event.clientY, rect);
+                if (glbHit) {
+                    coords = [
+                        Number(glbHit.x.toFixed(3)),
+                        Number(glbHit.y.toFixed(3)),
+                        Number(glbHit.z.toFixed(3))
+                    ];
+                }
+            } else {
+                const hit = await scene.camera.intersect(nx, ny);
+                if (hit && hit.position) {
+                    coords = [
+                        Number(hit.position.x.toFixed(3)),
+                        Number(hit.position.y.toFixed(3)),
+                        Number(hit.position.z.toFixed(3))
+                    ];
+                }
             }
         } catch (err) {
             console.warn('[StudioBridge] Intersect calculation failed:', err);
@@ -144,19 +163,31 @@ export const initStudioBridge = (events: Events, scene: Scene): StudioBridgeAPI 
                 throw new Error('signedModelUrl is required');
             }
 
-            // Clear previous splat layers
+            // Clear previous splat and glb model layers
             events.fire('scene.clear');
 
-            const urlWithoutQuery = signedModelUrl.split('?')[0];
-            const rawFilename = urlWithoutQuery.split('/').pop() || 'scene.sog';
-            const filename = rawFilename.toLowerCase().endsWith('.sog') ? rawFilename : `${rawFilename}.sog`;
-
-            await events.invoke('import', [
-                {
-                    filename,
-                    url: signedModelUrl
+            const rawFilename = extractModelFilename(signedModelUrl, isGlbUrl(signedModelUrl) ? 'scene.glb' : 'scene.sog');
+            if (isGlbUrl(signedModelUrl)) {
+                const modelElement = await loadGlbModelElement(scene, signedModelUrl, rawFilename);
+                await scene.add(modelElement);
+                const bound = scene.bound;
+                if (bound) {
+                    scene.camera.focus({
+                        focalPoint: bound.center,
+                        radius: Math.max(1, bound.halfExtents.length()),
+                        speed: 0
+                    });
                 }
-            ]);
+            } else {
+                const lower = rawFilename.toLowerCase();
+                const filename = lower.endsWith('.sog') || lower.endsWith('.ply') ? rawFilename : `${rawFilename}.sog`;
+                await events.invoke('import', [
+                    {
+                        filename,
+                        url: signedModelUrl
+                    }
+                ]);
+            }
 
             if (currentFloorTilt !== 0) {
                 bridge.setFloorTilt(currentFloorTilt);
@@ -175,15 +206,16 @@ export const initStudioBridge = (events: Events, scene: Scene): StudioBridgeAPI 
                 return [...currentCropBounds];
             }
             const splats = scene.getElementsByType(ElementType.splat) as Splat[];
-            if (splats.length > 0 && splats[0].worldBound) {
-                const b = splats[0].worldBound;
+            const models = scene.getElementsByType(ElementType.model) as GlbModelElement[];
+            const targetBound = splats[0]?.worldBound ?? models[0]?.worldBound;
+            if (targetBound) {
                 return [
-                    Number((b.center.x - b.halfExtents.x).toFixed(2)),
-                    Number((b.center.x + b.halfExtents.x).toFixed(2)),
-                    Number((b.center.y - b.halfExtents.y).toFixed(2)),
-                    Number((b.center.y + b.halfExtents.y).toFixed(2)),
-                    Number((b.center.z - b.halfExtents.z).toFixed(2)),
-                    Number((b.center.z + b.halfExtents.z).toFixed(2))
+                    Number((targetBound.center.x - targetBound.halfExtents.x).toFixed(2)),
+                    Number((targetBound.center.x + targetBound.halfExtents.x).toFixed(2)),
+                    Number((targetBound.center.y - targetBound.halfExtents.y).toFixed(2)),
+                    Number((targetBound.center.y + targetBound.halfExtents.y).toFixed(2)),
+                    Number((targetBound.center.z - targetBound.halfExtents.z).toFixed(2)),
+                    Number((targetBound.center.z + targetBound.halfExtents.z).toFixed(2))
                 ];
             }
             return [-5, 5, -5, 5, -5, 5];
@@ -230,6 +262,11 @@ export const initStudioBridge = (events: Events, scene: Scene): StudioBridgeAPI 
                 const cur = splat.entity.getLocalEulerAngles();
                 splat.entity.setLocalEulerAngles(degrees, cur.y, cur.z);
             }
+            const models = scene.getElementsByType(ElementType.model) as GlbModelElement[];
+            for (const model of models) {
+                const cur = model.entity.getLocalEulerAngles();
+                model.entity.setLocalEulerAngles(degrees, cur.y, cur.z);
+            }
             scene.boundDirty = true;
             scene.forceRender = true;
 
@@ -241,17 +278,18 @@ export const initStudioBridge = (events: Events, scene: Scene): StudioBridgeAPI 
 
         calibrateDoorScale: (doorHeightMeters = 2.1): { scaleFactor: number; currentScale: number } => {
             const splats = scene.getElementsByType(ElementType.splat) as Splat[];
-            if (!splats.length) {
+            const models = scene.getElementsByType(ElementType.model) as GlbModelElement[];
+            const target = splats[0] ?? models[0];
+            if (!target) {
                 return { scaleFactor: 1, currentScale: 1 };
             }
-            const splat = splats[0];
             let measuredHeight = 0;
 
-            if ((splat as any).measurePoints && (splat as any).measurePoints.length >= 2) {
-                const pts = (splat as any).measurePoints;
+            if ((target as any).measurePoints && (target as any).measurePoints.length >= 2) {
+                const pts = (target as any).measurePoints;
                 measuredHeight = pts[0].distance(pts[1]);
-            } else if (splat.worldBound) {
-                measuredHeight = splat.worldBound.halfExtents.y * 2 * 0.75;
+            } else if (target.worldBound) {
+                measuredHeight = target.worldBound.halfExtents.y * 2 * 0.75;
             }
 
             if (measuredHeight <= 0.01) {
@@ -259,12 +297,12 @@ export const initStudioBridge = (events: Events, scene: Scene): StudioBridgeAPI 
             }
 
             const scaleFactor = doorHeightMeters / measuredHeight;
-            const curScale = splat.entity.getLocalScale();
+            const curScale = target.entity.getLocalScale();
             const newScaleX = curScale.x * scaleFactor;
             const newScaleY = curScale.y * scaleFactor;
             const newScaleZ = curScale.z * scaleFactor;
 
-            splat.entity.setLocalScale(newScaleX, newScaleY, newScaleZ);
+            target.entity.setLocalScale(newScaleX, newScaleY, newScaleZ);
             scene.boundDirty = true;
             scene.forceRender = true;
 

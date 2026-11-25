@@ -447,6 +447,10 @@ class Scene {
         splats.forEach((splat) => {
             (splat as Splat).destroy();
         });
+        const models = this.getElementsByType(ElementType.model);
+        models.forEach((model) => {
+            model.destroy();
+        });
     }
 
     // elements removed while their add() was still awaiting element.add().
