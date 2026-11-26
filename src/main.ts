@@ -45,6 +45,7 @@ import { registerSelectCursor } from './ui/select-cursor';
 import { registerWebMCP } from './webmcp';
 import { initStudioBridge } from './bridge';
 import type { StudioBridgeAPI } from './bridge';
+import { startWebglGlbStudio } from './bridge/webgl-studio';
 
 declare global {
     interface LaunchParams {
@@ -129,18 +130,65 @@ const main = async () => {
     const shortcutManager = new ShortcutManager(events);
     events.function('shortcutManager', () => shortcutManager);
 
+    // Check whether a real WebGPU adapter is available before mounting SuperSplat's WebGPU-only UI.
+    let canTryWebGpu = false;
+    if (navigator.gpu?.requestAdapter) {
+        try {
+            const adapter = await navigator.gpu.requestAdapter();
+            canTryWebGpu = !!adapter;
+        } catch {
+            canTryWebGpu = false;
+        }
+    }
+
+    const launchWebglFallback = async (reason?: unknown) => {
+        if (reason) {
+            console.warn('[Studio] WebGPU unavailable, switching to WebGL2 GLB Studio fallback:', reason);
+        }
+        const webglCanvas = document.createElement('canvas');
+        document.body.appendChild(webglCanvas);
+        const webglDevice = await createGraphicsDevice(webglCanvas, {
+            deviceTypes: ['webgl2'],
+            antialias: true,
+            depth: true,
+            stencil: false,
+            xrCompatible: false,
+            powerPreference: 'high-performance'
+        });
+        await startWebglGlbStudio(webglCanvas, webglDevice, url.searchParams);
+    };
+
+    if (!canTryWebGpu) {
+        await launchWebglFallback();
+        return;
+    }
+
     // editor ui
     const editorUI = new EditorUI(events);
 
     // create the graphics device
-    const graphicsDevice = await createGraphicsDevice(editorUI.canvas, {
-        deviceTypes: ['webgpu'],
-        antialias: false,
-        depth: false,
-        stencil: false,
-        xrCompatible: false,
-        powerPreference: 'high-performance'
-    });
+    let graphicsDevice: Awaited<ReturnType<typeof createGraphicsDevice>>;
+    try {
+        graphicsDevice = await createGraphicsDevice(editorUI.canvas, {
+            deviceTypes: ['webgpu'],
+            antialias: false,
+            depth: false,
+            stencil: false,
+            xrCompatible: false,
+            powerPreference: 'high-performance'
+        });
+    } catch (err) {
+        editorUI.appContainer.dom.remove();
+        await launchWebglFallback(err);
+        return;
+    }
+
+    if (!graphicsDevice.isWebGPU) {
+        graphicsDevice.destroy();
+        editorUI.appContainer.dom.remove();
+        await launchWebglFallback('PlayCanvas fell back to non-WebGPU device');
+        return;
+    }
 
     events.function('scene.gpu', () => {
         // Use the renderer's adapter, rather than requesting another GPU.

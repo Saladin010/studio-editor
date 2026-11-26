@@ -45,7 +45,7 @@ export interface StudioMessage {
     error?: string;
 }
 
-const notifyParent = (msg: StudioMessage) => {
+export const notifyParent = (msg: StudioMessage) => {
     if (window.parent && window.parent !== window) {
         window.parent.postMessage(msg, '*');
     }
@@ -62,6 +62,80 @@ const respond = (targetWindow: Window, origin: string, id: string | undefined, d
         },
         origin === 'null' ? '*' : origin
     );
+};
+
+export const registerStudioBridgeListener = (bridge: StudioBridgeAPI): void => {
+    (window as any).studioBridge = bridge;
+
+    window.addEventListener('message', async (event: MessageEvent) => {
+        const data = event.data;
+        if (!data || typeof data !== 'object') return;
+
+        const { type, payload, id } = data;
+        if (!type || typeof type !== 'string' || !type.startsWith('studio:')) return;
+
+        const source = event.source as Window | null;
+
+        try {
+            switch (type) {
+                case 'studio:ping': {
+                    respond(source, event.origin, id, { status: 'ready' });
+                    break;
+                }
+                case 'studio:loadSog': {
+                    const ok = await bridge.loadSog(payload?.signedModelUrl);
+                    respond(source, event.origin, id, { success: ok });
+                    break;
+                }
+                case 'studio:getCropBox': {
+                    const bounds = bridge.getCropBox();
+                    respond(source, event.origin, id, { bounds });
+                    break;
+                }
+                case 'studio:setCropBox': {
+                    if (payload?.bounds) {
+                        bridge.setCropBox(payload.bounds);
+                    }
+                    respond(source, event.origin, id, { success: true });
+                    break;
+                }
+                case 'studio:getFloorTilt': {
+                    const degrees = bridge.getFloorTilt();
+                    respond(source, event.origin, id, { degrees });
+                    break;
+                }
+                case 'studio:setFloorTilt': {
+                    bridge.setFloorTilt(payload?.degrees ?? 0);
+                    respond(source, event.origin, id, { success: true });
+                    break;
+                }
+                case 'studio:calibrateDoorScale': {
+                    const res = bridge.calibrateDoorScale(payload?.doorHeightMeters);
+                    respond(source, event.origin, id, res);
+                    break;
+                }
+                case 'studio:captureSpawnPose': {
+                    const pose = bridge.captureSpawnPose();
+                    respond(source, event.origin, id, { pose });
+                    break;
+                }
+                case 'studio:enableSplatPick': {
+                    bridge.enableSplatPick();
+                    respond(source, event.origin, id, { enabled: true });
+                    break;
+                }
+                case 'studio:disableSplatPick': {
+                    bridge.disableSplatPick();
+                    respond(source, event.origin, id, { disabled: true });
+                    break;
+                }
+            }
+        } catch (err: any) {
+            respond(source, event.origin, id, undefined, err?.message || String(err));
+        }
+    });
+
+    notifyParent({ type: 'studio:ready' });
 };
 
 export const initStudioBridge = (events: Events, scene: Scene): StudioBridgeAPI => {
@@ -349,80 +423,6 @@ export const initStudioBridge = (events: Events, scene: Scene): StudioBridgeAPI 
         disableSplatPick
     };
 
-    // Attach to window for programmatic access
-    (window as any).studioBridge = bridge;
-
-    // Listen for postMessage commands from host/parent
-    window.addEventListener('message', async (event: MessageEvent) => {
-        const data = event.data;
-        if (!data || typeof data !== 'object') return;
-
-        const { type, payload, id } = data;
-        if (!type || typeof type !== 'string' || !type.startsWith('studio:')) return;
-
-        const source = event.source as Window | null;
-
-        try {
-            switch (type) {
-                case 'studio:ping': {
-                    respond(source, event.origin, id, { status: 'ready' });
-                    break;
-                }
-                case 'studio:loadSog': {
-                    const ok = await bridge.loadSog(payload?.signedModelUrl);
-                    respond(source, event.origin, id, { success: ok });
-                    break;
-                }
-                case 'studio:getCropBox': {
-                    const bounds = bridge.getCropBox();
-                    respond(source, event.origin, id, { bounds });
-                    break;
-                }
-                case 'studio:setCropBox': {
-                    if (payload?.bounds) {
-                        bridge.setCropBox(payload.bounds);
-                    }
-                    respond(source, event.origin, id, { success: true });
-                    break;
-                }
-                case 'studio:getFloorTilt': {
-                    const degrees = bridge.getFloorTilt();
-                    respond(source, event.origin, id, { degrees });
-                    break;
-                }
-                case 'studio:setFloorTilt': {
-                    bridge.setFloorTilt(payload?.degrees ?? 0);
-                    respond(source, event.origin, id, { success: true });
-                    break;
-                }
-                case 'studio:calibrateDoorScale': {
-                    const res = bridge.calibrateDoorScale(payload?.doorHeightMeters);
-                    respond(source, event.origin, id, res);
-                    break;
-                }
-                case 'studio:captureSpawnPose': {
-                    const pose = bridge.captureSpawnPose();
-                    respond(source, event.origin, id, { pose });
-                    break;
-                }
-                case 'studio:enableSplatPick': {
-                    bridge.enableSplatPick();
-                    respond(source, event.origin, id, { enabled: true });
-                    break;
-                }
-                case 'studio:disableSplatPick': {
-                    bridge.disableSplatPick();
-                    respond(source, event.origin, id, { disabled: true });
-                    break;
-                }
-            }
-        } catch (err: any) {
-            respond(source, event.origin, id, undefined, err?.message || String(err));
-        }
-    });
-
-    // Notify parent window that studio bridge is ready
-    notifyParent({ type: 'studio:ready' });
-
+    registerStudioBridgeListener(bridge);
     return bridge;
 };

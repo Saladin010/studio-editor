@@ -1,4 +1,4 @@
-import type { ContainerResource, MeshInstance, RenderComponent, StandardMaterial } from 'playcanvas';
+import type { AppBase, CameraComponent, ContainerResource, MeshInstance, RenderComponent, StandardMaterial } from 'playcanvas';
 import { Asset, BoundingBox, Color, Entity, Ray, Vec3 } from 'playcanvas';
 
 import { Element, ElementType } from '../element';
@@ -55,7 +55,7 @@ export const applyUnlitMaterials = (rootEntity: Entity): void => {
     }
 };
 
-const computeEntityMeshBound = (rootEntity: Entity, target: BoundingBox): boolean => {
+export const computeEntityMeshBound = (rootEntity: Entity, target: BoundingBox): boolean => {
     const renders = rootEntity.findComponents('render') as RenderComponent[];
     let valid = false;
     for (const render of renders) {
@@ -113,12 +113,15 @@ export class GlbModelElement extends Element {
     }
 }
 
-export const loadGlbModelElement = (scene: Scene, url: string, filename: string): Promise<GlbModelElement> => {
-    const { app } = scene;
+export const loadGlbEntityOnApp = (
+    app: AppBase,
+    url: string,
+    filename: string
+): Promise<{ asset: Asset; entity: Entity }> => {
     const assetName = filename.toLowerCase().endsWith('.glb') ? filename : `${filename}.glb`;
     const asset = new Asset(assetName, 'container', { url, filename: assetName });
 
-    return new Promise<GlbModelElement>((resolve, reject) => {
+    return new Promise<{ asset: Asset; entity: Entity }>((resolve, reject) => {
         asset.once('load', () => {
             try {
                 const resource = asset.resource as ContainerResource;
@@ -128,7 +131,7 @@ export const loadGlbModelElement = (scene: Scene, url: string, filename: string)
 
                 const wrapper = new Entity('glbModelRoot', app);
                 wrapper.addChild(containerEntity);
-                resolve(new GlbModelElement(asset, wrapper));
+                resolve({ asset, entity: wrapper });
             } catch (err) {
                 app.assets.remove(asset);
                 asset.unload();
@@ -144,6 +147,11 @@ export const loadGlbModelElement = (scene: Scene, url: string, filename: string)
         app.assets.add(asset);
         app.assets.load(asset);
     });
+};
+
+export const loadGlbModelElement = async (scene: Scene, url: string, filename: string): Promise<GlbModelElement> => {
+    const { asset, entity } = await loadGlbEntityOnApp(scene.app, url, filename);
+    return new GlbModelElement(asset, entity);
 };
 
 const EPSILON = 1e-6;
@@ -236,14 +244,13 @@ const raycastMeshInstance = (ray: Ray, mi: MeshInstance): number | null => {
     return mi.aabb.intersectsRay(ray, tempHit) ? ray.origin.distance(tempHit) : null;
 };
 
-export const raycastGlbModels = (
-    scene: Scene,
-    models: GlbModelElement[],
+export const raycastCameraAgainstEntities = (
+    cam: CameraComponent,
+    entities: Entity[],
     clientX: number,
     clientY: number,
     rect: DOMRect
 ): Vec3 | null => {
-    const cam = scene.camera?.mainCamera?.camera;
     if (!cam) return null;
 
     const sx = clientX - rect.left;
@@ -254,8 +261,8 @@ export const raycastGlbModels = (
     const ray = new Ray(nearPt, dir);
 
     let closestT = Infinity;
-    for (const model of models) {
-        const renders = model.entity.findComponents('render') as RenderComponent[];
+    for (const rootEntity of entities) {
+        const renders = rootEntity.findComponents('render') as RenderComponent[];
         for (const render of renders) {
             for (const mi of render.meshInstances) {
                 const t = raycastMeshInstance(ray, mi);
@@ -271,5 +278,23 @@ export const raycastGlbModels = (
         ray.origin.x + ray.direction.x * closestT,
         ray.origin.y + ray.direction.y * closestT,
         ray.origin.z + ray.direction.z * closestT
+    );
+};
+
+export const raycastGlbModels = (
+    scene: Scene,
+    models: GlbModelElement[],
+    clientX: number,
+    clientY: number,
+    rect: DOMRect
+): Vec3 | null => {
+    const cam = scene.camera?.mainCamera?.camera;
+    if (!cam) return null;
+    return raycastCameraAgainstEntities(
+        cam,
+        models.map((m) => m.entity),
+        clientX,
+        clientY,
+        rect
     );
 };
