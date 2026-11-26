@@ -1,5 +1,5 @@
 import type { AppBase, CameraComponent, ContainerResource, MeshInstance, RenderComponent, StandardMaterial } from 'playcanvas';
-import { Asset, BoundingBox, Color, Entity, Ray, Vec3 } from 'playcanvas';
+import { Asset, BoundingBox, Color, Entity, Plane, Ray, Vec3 } from 'playcanvas';
 
 import { Element, ElementType } from '../element';
 import type { Scene } from '../scene';
@@ -51,6 +51,36 @@ export const applyUnlitMaterials = (rootEntity: Entity): void => {
 
             mat.diffuse = new Color(0, 0, 0);
             mat.update();
+        }
+    }
+};
+
+/**
+ * Apply 6-DOF world-space clipping planes onto every MeshInstance under rootEntity
+ * so moving Crop Box sliders slices away exterior scan clutter in real time.
+ */
+export const applyCropBoundsToEntity = (
+    rootEntity: Entity | null | undefined,
+    bounds?: [number, number, number, number, number, number] | null
+): void => {
+    if (!rootEntity) return;
+
+    const planes: Plane[] =
+        Array.isArray(bounds) && bounds.length === 6 && bounds.every((n) => Number.isFinite(n))
+            ? [
+                  new Plane().setFromPointNormal(new Vec3(bounds[0], 0, 0), new Vec3(1, 0, 0)),
+                  new Plane().setFromPointNormal(new Vec3(bounds[1], 0, 0), new Vec3(-1, 0, 0)),
+                  new Plane().setFromPointNormal(new Vec3(0, bounds[2], 0), new Vec3(0, 1, 0)),
+                  new Plane().setFromPointNormal(new Vec3(0, bounds[3], 0), new Vec3(0, -1, 0)),
+                  new Plane().setFromPointNormal(new Vec3(0, 0, bounds[4]), new Vec3(0, 0, 1)),
+                  new Plane().setFromPointNormal(new Vec3(0, 0, bounds[5]), new Vec3(0, 0, -1))
+              ]
+            : [];
+
+    const renders = rootEntity.findComponents('render') as RenderComponent[];
+    for (const render of renders) {
+        for (const mi of render.meshInstances) {
+            mi.clippingPlanes = planes;
         }
     }
 };

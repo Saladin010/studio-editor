@@ -10,6 +10,7 @@ import {
 import { PCApp } from '../pc-app';
 
 import {
+    applyCropBoundsToEntity,
     computeEntityMeshBound,
     extractModelFilename,
     isGlbUrl,
@@ -318,6 +319,7 @@ export const startWebglGlbStudio = async (
             if (currentFloorTilt !== 0) {
                 entity.setLocalEulerAngles(currentFloorTilt, 0, 0);
             }
+            applyCropBoundsToEntity(entity, currentCropBounds);
 
             if (computeEntityMeshBound(entity, currentBound)) {
                 focalPoint.copy(currentBound.center);
@@ -333,6 +335,7 @@ export const startWebglGlbStudio = async (
 
         setCropBox: (bounds: CropBoxBounds) => {
             currentCropBounds = [...bounds];
+            applyCropBoundsToEntity(currentEntity, currentCropBounds);
             notifyParent({
                 type: 'studio:cropBoxChanged',
                 bounds: currentCropBounds

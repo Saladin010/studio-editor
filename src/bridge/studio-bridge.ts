@@ -4,6 +4,7 @@ import type { Events } from '../events';
 import type { Scene } from '../scene';
 import type { Splat } from '../splat';
 import {
+    applyCropBoundsToEntity,
     extractModelFilename,
     type GlbModelElement,
     isGlbUrl,
@@ -315,6 +316,11 @@ export const initStudioBridge = (events: Events, scene: Scene): StudioBridgeAPI 
             cropBoxShape.lenZ = lz;
             cropBoxShape.pivot.setPosition(cx, cy, cz);
             cropBoxShape.updateBound();
+
+            const models = scene.getElementsByType(ElementType.model) as GlbModelElement[];
+            for (const model of models) {
+                applyCropBoundsToEntity(model.entity, currentCropBounds);
+            }
 
             scene.boundDirty = true;
             scene.forceRender = true;
