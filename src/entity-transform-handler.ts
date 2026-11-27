@@ -1,12 +1,16 @@
 import type { Vec3 } from 'playcanvas';
 import { Mat4, Quat } from 'playcanvas';
 
+import type { GlbModelElement } from './bridge/glb-model';
 import { PlacePivotOp, EntityTransformOp, MultiOp } from './edit-ops';
+import { ElementType } from './element';
 import type { Events } from './events';
 import type { Pivot } from './pivot';
 import type { Splat } from './splat';
 import { Transform } from './transform';
 import type { TransformHandler } from './transform-handler';
+
+type TransformTarget = Splat | GlbModelElement;
 
 const mat = new Mat4();
 const quat = new Quat();
@@ -14,7 +18,7 @@ const transform = new Transform();
 
 class EntityTransformHandler implements TransformHandler {
     events: Events;
-    splat: Splat;
+    splat: TransformTarget;
     top: EntityTransformOp;
     pop: PlacePivotOp;
     bindMat = new Mat4();
@@ -46,6 +50,12 @@ class EntityTransformHandler implements TransformHandler {
             }
         });
 
+        events.on('glb.localFrame', (model: GlbModelElement) => {
+            if (this.splat === model) {
+                this.placePivot();
+            }
+        });
+
         events.on('camera.focalPointPicked', (details: { splat: Splat; position: Vec3 }) => {
             if (this.splat && ['move', 'rotate', 'scale'].includes(this.events.invoke('tool.active'))) {
                 const pivot = events.invoke('pivot') as Pivot;
@@ -63,7 +73,7 @@ class EntityTransformHandler implements TransformHandler {
     }
 
     activate() {
-        this.splat = this.events.invoke('selection') as Splat;
+        this.splat = this.events.invoke('selection') as TransformTarget;
         if (this.splat) {
             this.placePivot();
         }
@@ -89,7 +99,7 @@ class EntityTransformHandler implements TransformHandler {
 
         // create op
         this.top = new EntityTransformOp({
-            splat: this.splat,
+            splat: this.splat as Splat,
             oldt: new Transform(p, r, s),
             newt: new Transform(p, r, s)
         });
@@ -113,14 +123,23 @@ class EntityTransformHandler implements TransformHandler {
         this.splat.move(t, r, s);
         this.top.newt.set(t, r, s);
         this.pop.newt.copy(transform);
+
+        if (this.splat.type === ElementType.model) {
+            this.events.fire('glb.transformMoving', this.splat as GlbModelElement);
+        }
     }
 
     end() {
         // if anything changed then register the op with undo/redo system
         const { oldt, newt } = this.top;
+        const changed = !oldt.equals(newt);
 
-        if (!oldt.equals(newt)) {
+        if (changed) {
             this.events.fire('edit.add', new MultiOp([this.top, this.pop]));
+        }
+
+        if (this.splat.type === ElementType.model) {
+            this.events.fire('glb.transformEnded', this.splat as GlbModelElement, changed);
         }
 
         this.top = null;
